@@ -2,21 +2,14 @@
 /**
  * Plugin Name: bbPress Report Abuse
  * Plugin URI:  http://github.com/croasdell/bbpress-report-abuse
- * Description: Provides a "Report Abuse" link in replies
- * Version:     1.0.0
+ * Description: Provides a "Report Abuse" link in replies and a simple settings page to configure the report form URL and moderator emails.
+ * Version:     1.1.0
  * Author:      Ian Croasdell
  * Author URI:  http://www.croasdell.biz
  * Text Domain: bbpress-report-abuse
  * Domain Path: /languages
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * @author     Ian Croasdell
- * @version    1.0.0
- * @package    bbPressReportAbuse
+ * @package bbPressReportAbuse
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -25,70 +18,65 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 if ( ! class_exists( 'bbp_Report_Abuse' ) ) {
 
-	/**
-	 * bbPress Report Abuse init class
-	 *
-	 * Improvements:
-	 * - Loads textdomain
-	 * - Checks for bbPress / Gravity Forms before hooking
-	 * - Sanitizes inputs and avoids raw $_GET usage
-	 * - Supports both array- and object-based GF field structures
-	 * - Uses escaping and translation functions
-	 */
 	final class bbp_Report_Abuse {
+
+		const VERSION = '1.1.0';
+		const OPTION_REPORT_URL = 'bbra_report_url';
+		const OPTION_MODERATOR_EMAILS = 'bbra_moderator_emails';
 
 		/**
 		 * Constructor.
 		 */
 		public function __construct() {
+			// Load textdomain early.
 			add_action( 'plugins_loaded', array( $this, 'load_textdomain' ) );
 
-			// Only hook bbPress template injection if bbPress is active.
-			if ( function_exists( 'bbp_get_reply_id' ) ) {
+			// Hook frontend link if bbPress present.
+			if ( function_exists( 'bbp_get_reply_id' ) || function_exists( 'bbp_get_topic_id' ) ) {
 				add_action( 'bbp_theme_before_reply_admin_links', array( $this, 'abuse_link_in_forum' ) );
 			}
 
-			// Only hook Gravity Forms filter if GF is active.
-			if ( class_exists( 'GFForms' ) || function_exists( 'gform_pre_render' ) ) {
+			// Gravity Forms integration.
+			if ( function_exists( 'gform_pre_render' ) || class_exists( 'GFForms' ) ) {
 				add_filter( 'gform_pre_render', array( $this, 'abuse_link_in_form' ) );
 			}
+
+			// Admin settings.
+			add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
+			add_action( 'admin_init', array( $this, 'register_settings' ) );
+
+			// Uninstall cleanup registered in uninstall.php if you choose to include it.
 		}
 
 		/**
-		 * Load plugin textdomain
+		 * Load translations.
 		 */
 		public function load_textdomain() {
 			load_plugin_textdomain( 'bbpress-report-abuse', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 		}
 
 		/**
-		 * Abuse Link in Forum
-		 *
-		 * Defaults to '/report-abuse' but is filterable
-		 *
-		 * @since 1.0.0
+		 * Print abuse link in forum replies.
 		 */
 		public function abuse_link_in_forum() {
-			/**
-			 * Filterable label and URL. Callers must pass safe values;
-			 * we still run basic sanitization & escaping here.
-			 */
 			$label = apply_filters( 'bbpress_report_abuse_label', __( 'Report Abuse', 'bbpress-report-abuse' ) );
 
+			// Get configured report page URL or default.
 			$default_url = site_url( '/report-abuse' );
-			$url         = apply_filters( 'bbpress_report_abuse_url', $default_url );
+			$url = apply_filters( 'bbpress_report_abuse_url', $this->get_report_url( $default_url ) );
 
-			// Determine current reply/topic ID safely: prefer bbPress helper if available.
+			// Determine item id (prefer bbPress helpers).
 			$item_id = 0;
 			if ( function_exists( 'bbp_get_reply_id' ) ) {
 				$item_id = intval( bbp_get_reply_id() );
 			}
-			// fallback to global post ID (sanitized)
+			if ( empty( $item_id ) && function_exists( 'bbp_get_topic_id' ) ) {
+				$item_id = intval( bbp_get_topic_id() );
+			}
 			if ( empty( $item_id ) ) {
 				$item_id = intval( get_the_ID() );
 			}
 
-			// Allow an empty item_id if something odd is happening, but avoid adding a broken query arg.
 			$sanitized_url = esc_url( $url );
 			if ( $item_id > 0 ) {
 				$sanitized_url = esc_url( add_query_arg( 'bbp_report_topic', $item_id, $sanitized_url ) );
@@ -102,50 +90,42 @@ if ( ! class_exists( 'bbp_Report_Abuse' ) ) {
 		}
 
 		/**
-		 * Add the abuse link to a Gravity form field with a
-		 * parameter name of 'bbp_report_abuse'
+		 * Pre-populate Gravity Forms field parameter 'bbp_report_abuse' with the reported permalink.
 		 *
-		 * Supports both array and object field shapes used by different GF versions.
+		 * Supports GF field formats as arrays or objects.
 		 *
-		 * @param array|object $form Gravity Forms form object/array.
-		 * @return array|object $form
-		 *
-		 * @since 1.0.0
+		 * @param array|object $form Gravity Forms form.
+		 * @return array|object
 		 */
 		public function abuse_link_in_form( $form ) {
-			// Safely get topic ID from GET. Use filter_input for sanitization.
 			$topic = filter_input( INPUT_GET, 'bbp_report_topic', FILTER_VALIDATE_INT );
 			if ( empty( $topic ) || $topic <= 0 ) {
 				return $form;
 			}
 
-			// Build permalink once and sanitize for storing in the default value.
 			$permalink = get_permalink( $topic );
 			if ( ! $permalink ) {
 				return $form;
 			}
 			$permalink = esc_url_raw( $permalink );
 
-			// Gravity Forms sometimes provides fields as objects or arrays.
 			if ( empty( $form ) || empty( $form['fields'] ) ) {
 				return $form;
 			}
 
 			foreach ( $form['fields'] as &$field ) {
-				// Check allowsPrepopulate for both object/array
 				$allows_prepopulate = false;
-				$input_name         = '';
+				$input_name = '';
 
 				if ( is_array( $field ) ) {
 					$allows_prepopulate = ! empty( $field['allowsPrepopulate'] );
-					$input_name         = isset( $field['inputName'] ) ? $field['inputName'] : '';
+					$input_name = isset( $field['inputName'] ) ? $field['inputName'] : '';
 				} elseif ( is_object( $field ) ) {
 					$allows_prepopulate = ! empty( $field->allowsPrepopulate );
-					$input_name         = isset( $field->inputName ) ? $field->inputName : ( isset( $field->input_name ) ? $field->input_name : '' );
+					$input_name = isset( $field->inputName ) ? $field->inputName : ( isset( $field->input_name ) ? $field->input_name : '' );
 				}
 
 				if ( $allows_prepopulate && 'bbp_report_abuse' === $input_name ) {
-					// Set defaultValue in the correct shape.
 					if ( is_array( $field ) ) {
 						$field['defaultValue'] = $permalink;
 					} else {
@@ -153,11 +133,137 @@ if ( ! class_exists( 'bbp_Report_Abuse' ) ) {
 					}
 				}
 			}
-			// Return modified form (GF expects the form back).
+
 			return $form;
+		}
+
+		/**
+		 * Add admin menu for plugin settings.
+		 */
+		public function add_admin_menu() {
+			add_options_page(
+				__( 'bbPress Report Abuse', 'bbpress-report-abuse' ),
+				__( 'bbPress Report Abuse', 'bbpress-report-abuse' ),
+				'manage_options',
+				'bbpress-report-abuse',
+				array( $this, 'settings_page' )
+			);
+		}
+
+		/**
+		 * Register settings.
+		 */
+		public function register_settings() {
+			register_setting( 'bbra_settings_group', self::OPTION_REPORT_URL, array( $this, 'sanitize_report_url' ) );
+			register_setting( 'bbra_settings_group', self::OPTION_MODERATOR_EMAILS, array( $this, 'sanitize_moderator_emails' ) );
+
+			add_settings_section(
+				'bbra_main',
+				__( 'Report Abuse Settings', 'bbpress-report-abuse' ),
+				function() { echo '<p>' . esc_html__( 'Configure the report page URL and moderator email addresses.', 'bbpress-report-abuse' ) . '</p>'; },
+				'bbra_settings'
+			);
+
+			add_settings_field(
+				self::OPTION_REPORT_URL,
+				__( 'Report page URL', 'bbpress-report-abuse' ),
+				array( $this, 'field_report_url_cb' ),
+				'bbra_settings',
+				'bbra_main'
+			);
+
+			add_settings_field(
+				self::OPTION_MODERATOR_EMAILS,
+				__( 'Moderator emails (comma-separated)', 'bbpress-report-abuse' ),
+				array( $this, 'field_moderator_emails_cb' ),
+				'bbra_settings',
+				'bbra_main'
+			);
+		}
+
+		/**
+		 * Sanitize report url.
+		 */
+		public function sanitize_report_url( $val ) {
+			return esc_url_raw( trim( $val ) );
+		}
+
+		/**
+		 * Sanitize moderator emails.
+		 */
+		public function sanitize_moderator_emails( $val ) {
+			if ( is_array( $val ) ) {
+				$val = implode( ',', $val );
+			}
+			$parts = array_map( 'trim', explode( ',', $val ) );
+			$good = array();
+			foreach ( $parts as $p ) {
+				if ( is_email( $p ) ) {
+					$good[] = $p;
+				}
+			}
+			return implode( ',', $good );
+		}
+
+		/**
+		 * Field callback - report url.
+		 */
+		public function field_report_url_cb() {
+			$value = get_option( self::OPTION_REPORT_URL, site_url( '/report-abuse' ) );
+			printf(
+				'<input type="url" class="regular-text" name="%1$s" value="%2$s" />',
+				esc_attr( self::OPTION_REPORT_URL ),
+				esc_attr( $value )
+			);
+			echo '<p class="description">' . esc_html__( 'URL of the page containing your report form. Default: /report-abuse', 'bbpress-report-abuse' ) . '</p>';
+		}
+
+		/**
+		 * Field callback - moderator emails.
+		 */
+		public function field_moderator_emails_cb() {
+			$value = get_option( self::OPTION_MODERATOR_EMAILS, '' );
+			printf(
+				'<input type="text" class="regular-text" name="%1$s" value="%2$s" />',
+				esc_attr( self::OPTION_MODERATOR_EMAILS ),
+				esc_attr( $value )
+			);
+			echo '<p class="description">' . esc_html__( 'Comma-separated list of emails to notify when a report is submitted (optional).', 'bbpress-report-abuse' ) . '</p>';
+		}
+
+		/**
+		 * Settings page output.
+		 */
+		public function settings_page() {
+			if ( ! current_user_can( 'manage_options' ) ) {
+				return;
+			}
+			?>
+			<div class="wrap">
+				<h1><?php esc_html_e( 'bbPress Report Abuse', 'bbpress-report-abuse' ); ?></h1>
+				<form method="post" action="options.php">
+					<?php
+					settings_fields( 'bbra_settings_group' );
+					do_settings_sections( 'bbra_settings' );
+					submit_button();
+					?>
+				</form>
+			</div>
+			<?php
+		}
+
+		/**
+		 * Helper to get the report URL (option or default).
+		 */
+		private function get_report_url( $default ) {
+			$url = get_option( self::OPTION_REPORT_URL, '' );
+			if ( empty( $url ) ) {
+				return $default;
+			}
+			return esc_url( $url );
 		}
 	}
 
-	// Initialize.
+	// Initialize plugin.
 	( new bbp_Report_Abuse() );
 }
