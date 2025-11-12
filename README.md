@@ -1,12 +1,43 @@
-# bbPress-Report-Abuse
-This plugin provides a "Report Abuse" link in bbPress replies. It is designed to be used with bbPress and Gravity Forms.
- Download and install plugin.
-    Create a page called "Report Abuse" (URL = /report-abuse). See customization notes below for how to change this.
-    Create a Gravity Form. Add whatever fields you'd like users to fill out. One of them should be "Reported URL". Click the "Advanced" tab, check "Allow field to be populated dynamically", and specify bbp_report_abuse as the parameter name.
-    Add your new form to the Report Abuse page.
+```markdown
+# bbPress Report Abuse
 
-Now users can click the "Report Abuse" link above any reply in your forums. They are taken to the Report Abuse page with the reporting form, and the reported URL is filled out for them already.
-Customization Filters
+This plugin provides a "Report Abuse" link in bbPress replies. It integrates with Gravity Forms to pre-populate a "Reported URL" field so users can quickly report problematic content. This branch includes improvements: a small admin settings page (report page URL + moderator emails), i18n, sanitization, and a test/CI setup.
 
-    bbpress_report_abuse_label - change the phrase "Report Abuse" to something else
-    bbpress_report_abuse_url – change the URL of the form (defaults to /report-abuse)
+## Installation
+
+1. Upload the plugin to `/wp-content/plugins/` and activate it.
+2. Create a WordPress page for your form (default is `/report-abuse`).
+3. Create a Gravity Form and add a field to capture the reported URL:
+   - Edit the field → Advanced → check "Allow field to be populated dynamically".
+   - Set the parameter name to `bbp_report_abuse`.
+4. Insert that Gravity Form into the Report Abuse page.
+
+## Settings
+
+Visit Settings → bbPress Report Abuse:
+- Report page URL: URL of the page with your Gravity Form (defaults to `/report-abuse`)
+- Moderator emails: comma-separated emails to notify (optional)
+
+## Filters
+
+- `bbpress_report_abuse_label` — change the link text (default: "Report Abuse")
+- `bbpress_report_abuse_url` — change the link destination programmatically (option takes precedence)
+
+## Development
+
+- Composer: `composer install`
+- Run tests: `vendor/bin/phpunit`
+- CI: GitHub Actions workflow runs PHP unit tests.
+
+## Notes
+
+- The plugin sanitizes inputs and escapes outputs.
+- If you want email notifications on form submission, either use Gravity Forms notifications or hook into GF entry submission to email the configured moderator addresses.
+
+## Changelog
+
+### 1.1.0
+- Add settings page for report URL and moderator emails.
+- Add i18n, sanitization and escaping.
+- Add basic PHPUnit & GitHub Actions CI config.
+```
